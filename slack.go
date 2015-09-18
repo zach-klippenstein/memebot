@@ -23,36 +23,62 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-package main
+package memebot
 
 import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
+	"golang.org/x/net/context"
 	"golang.org/x/net/websocket"
 )
 
 // These two structures represent the response of the Slack API rtm.start.
 // Only some fields are included. The rest are ignored by json.Unmarshal.
 
-type responseRtmStart struct {
-	Ok    bool         `json:"ok"`
-	Error string       `json:"error"`
-	Url   string       `json:"url"`
-	Self  responseSelf `json:"self"`
+type ResponseRtmStart struct {
+	Ok       bool      `json:"ok"`
+	Error    string    `json:"error"`
+	Url      string    `json:"url"`
+	Self     Self      `json:"self"`
+	Channels []Channel `json:"channels"`
 }
 
-type responseSelf struct {
-	Id string `json:"id"`
+// Self contains information about this bot's identity on the server.
+type Self struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type Channel struct {
+	Id       string `json:"id"`
+	Name     string `json:"name"`
+	IsMember bool   `json:"is_member"`
+}
+
+// Starts a websocket-based Real Time API session and return the websocket
+// and the ID of the (bot-)user whom the token belongs to.
+func slackConnect(token string) (*websocket.Conn, *ResponseRtmStart, error) {
+	response, err := slackStart(token)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ws, err := websocket.Dial(response.Url, "", "https://api.slack.com/")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return ws, response, nil
 }
 
 // slackStart does a rtm.start, and returns a websocket URL and user ID. The
 // websocket URL can be used to initiate an RTM session.
-func slackStart(token string) (wsurl, id string, err error) {
+func slackStart(token string) (response *ResponseRtmStart, err error) {
 	url := fmt.Sprintf("https://slack.com/api/rtm.start?token=%s", token)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -67,26 +93,23 @@ func slackStart(token string) (wsurl, id string, err error) {
 	if err != nil {
 		return
 	}
-	var respObj responseRtmStart
-	err = json.Unmarshal(body, &respObj)
+	response = &ResponseRtmStart{}
+	err = json.Unmarshal(body, response)
 	if err != nil {
 		return
 	}
 
-	if !respObj.Ok {
-		err = fmt.Errorf("Slack error: %s", respObj.Error)
+	if !response.Ok {
+		err = fmt.Errorf("Slack error: %s", response.Error)
 		return
 	}
 
-	wsurl = respObj.Url
-	id = respObj.Self.Id
 	return
 }
 
-// These are the messages read off and written into the websocket. Since this
+// Message are the messages read off and written into the websocket. Since this
 // struct serves as both read and write, we include the "Id" field which is
 // required only for writing.
-
 type Message struct {
 	Id      uint64 `json:"id"`
 	Type    string `json:"type"`
@@ -94,8 +117,26 @@ type Message struct {
 	Text    string `json:"text"`
 }
 
-func getMessage(ws *websocket.Conn) (m Message, err error) {
-	err = websocket.JSON.Receive(ws, &m)
+func (m Message) IsMessage() bool {
+	return m.Type == "message"
+}
+
+func (m Message) IsUserMentioned(id string) bool {
+	return strings.HasPrefix(m.Text, "<@"+id+">")
+}
+
+func (m Message) Reply(reply string) Message {
+	m.Text = reply
+	return m
+}
+
+func getMessage(ctx context.Context, ws *websocket.Conn) (m Message, err error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		ws.SetReadDeadline(deadline)
+	}
+	if err = websocket.JSON.Receive(ws, &m); err != nil {
+		return
+	}
 	return
 }
 
@@ -104,20 +145,4 @@ var counter uint64
 func postMessage(ws *websocket.Conn, m Message) error {
 	m.Id = atomic.AddUint64(&counter, 1)
 	return websocket.JSON.Send(ws, m)
-}
-
-// Starts a websocket-based Real Time API session and return the websocket
-// and the ID of the (bot-)user whom the token belongs to.
-func slackConnect(token string) (*websocket.Conn, string) {
-	wsurl, id, err := slackStart(token)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ws, err := websocket.Dial(wsurl, "", "https://api.slack.com/")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return ws, id
 }
