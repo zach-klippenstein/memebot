@@ -17,20 +17,22 @@ import (
 )
 
 const (
-	SLACK_TOKEN_VAR           = "SLACK_TOKEN"
-	IMAGE_DIR_VAR             = "IMAGES_DIR"
-	KEYWORD_PATTERN_VAR       = "KEYWORD_PATTERN"
-	IMAGE_SERVER_HOSTNAME_VAR = "IMAGE_SERVER_HOSTNAME"
-	IMAGE_SERVER_PORT_VAR     = "IMAGE_SERVER_PORT"
+	SLACK_TOKEN_VAR               = "SLACK_TOKEN"
+	IMAGE_DIR_VAR                 = "IMAGES_DIR"
+	KEYWORD_PATTERN_VAR           = "KEYWORD_PATTERN"
+	IMAGE_SERVER_HOSTNAME_VAR     = "HOSTNAME"
+	IMAGE_SERVER_PORT_VAR         = "PORT"
+	IMAGE_SERVER_DISPLAY_PORT_VAR = "DISPLAY_PORT"
 
 	DEFAULT_KEYWORD_PATTERN = `(\w+)$`
 )
 
 var (
-	ImagesDir           string
-	KeywordPattern      string
-	ImageServerPort     int
-	ImageServerHostname string
+	ImagesDir              string
+	KeywordPattern         string
+	ImageServerHostname    string
+	ImageServerPort        int
+	ImageServerDisplayPort int
 
 	ListKeywordsMode = flag.Bool("list-keywords", false, "lists the set of keywords without starting the bot")
 	ListMemesMode    = flag.Bool("list-memes", false, "lists all memes' URLs")
@@ -39,7 +41,7 @@ var (
 func init() {
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of %s:", os.Args[0])
-		fmt.Fprintln(os.Stderr, os.Args[0], "-images path [-keyword-pattern regex] [-serve-port port] [-serve-host hostname]")
+		fmt.Fprintln(os.Stderr, os.Args[0], "-images path [options...]")
 		fmt.Fprintln(os.Stderr, os.Args[0], "-list-keywords")
 		fmt.Fprintln(os.Stderr, os.Args[0], "-list-memes")
 		fmt.Fprintln(os.Stderr)
@@ -51,10 +53,12 @@ func init() {
 		"path of directory containing images named like keyword1[,keyword2,...]. Overrides "+IMAGE_DIR_VAR+" environment variable.")
 	flag.StringVar(&KeywordPattern, "keyword-pattern", "",
 		"case-insensitive regex with capture groups used to extract keywords from messages. Overrides "+KEYWORD_PATTERN_VAR+" environment variable. Default is "+DEFAULT_KEYWORD_PATTERN)
-	flag.IntVar(&ImageServerPort, "serve-port", 0,
-		"port to listen on for serving images. Overrides "+IMAGE_SERVER_PORT_VAR+" environment variable.")
 	flag.StringVar(&ImageServerHostname, "serve-host", "",
 		"hostname to use in image links. Overrides "+IMAGE_SERVER_HOSTNAME_VAR+" environment variable.")
+	flag.IntVar(&ImageServerPort, "serve-port", 0,
+		"port to listen on for serving images. Overrides "+IMAGE_SERVER_PORT_VAR+" environment variable.")
+	flag.IntVar(&ImageServerDisplayPort, "serve-display-port", 0,
+		"port use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to the bound port. Overrides "+IMAGE_SERVER_DISPLAY_PORT_VAR+" environment variable.")
 }
 
 func main() {
@@ -75,6 +79,10 @@ func main() {
 		KeywordPattern = DEFAULT_KEYWORD_PATTERN
 	}
 
+	if ImageServerHostname == "" {
+		ImageServerHostname = os.Getenv(IMAGE_SERVER_HOSTNAME_VAR)
+	}
+
 	if ImageServerPort == 0 {
 		ImageServerPort, _ = strconv.Atoi(os.Getenv(IMAGE_SERVER_PORT_VAR))
 	}
@@ -82,13 +90,16 @@ func main() {
 		ImageServerPort = 80
 	}
 
-	if ImageServerHostname == "" {
-		ImageServerHostname = os.Getenv(IMAGE_SERVER_HOSTNAME_VAR)
+	if ImageServerDisplayPort == 0 {
+		ImageServerDisplayPort, _ = strconv.Atoi(os.Getenv(IMAGE_SERVER_DISPLAY_PORT_VAR))
+	}
+	if ImageServerDisplayPort == 0 {
+		ImageServerDisplayPort = ImageServerPort
 	}
 
 	port := ":" + strconv.Itoa(ImageServerPort)
-	host := getHostname()
-	router := mux.NewRouter().Host(host + port).Subrouter()
+	displayPort := ":" + strconv.Itoa(ImageServerDisplayPort)
+	router := mux.NewRouter().Host(getHostname() + displayPort).Subrouter()
 	rootRoute := router.PathPrefix("/memes/")
 
 	memepository := NewFileServingMemepository(FileServingMemepositoryConfig{
