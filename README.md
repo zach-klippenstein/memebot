@@ -46,7 +46,7 @@ You can also dump information about the meme repository:
 
 ## Deploying to Heroku
 
-Heroku requires a Procfile in the root of the repo. It will start the process with the root of the repo as the working directory. Once you've created your Heroku app, set the `GO15VENDOREXPERIMENT` and other environment variables as described above. Note: `PORT` is set by Heroku, don't set it yourself. `DISPLAY_PORT` should be 80 (the public-facing port on Heroku's load balancer), and `HOSTNAME` should be whatever hostname your app is given (e.g. `my-memebot.heroku.com`).
+Once you've created your Heroku app, set the `GO15VENDOREXPERIMENT` and other environment variables as described above. Note: `PORT` is set by Heroku, don't set it yourself. `DISPLAY_PORT` should be 80 (the public-facing port on Heroku's load balancer), and `HOSTNAME` should be whatever hostname your app is given (e.g. `my-memebot.heroku.com`).
 
 To actually deploy the app, you will need to add the Heroku remote to your repo, create a Procfile, and push to master. I recommend creating a `deploy` branch and only adding your Procfile to that branch. You can also create a directory for images and add those. This allows you to keep your local master in sync with this repo (or whatever remote you're using), and merge your local master into your local deploy branch. 
 
