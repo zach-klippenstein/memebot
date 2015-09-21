@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	DEFAULT_PORT = 8080
+
 	SLACK_TOKEN_VAR               = "SLACK_TOKEN"
 	IMAGE_DIR_VAR                 = "IMAGES_DIR"
 	KEYWORD_PATTERN_VAR           = "KEYWORD_PATTERN"
@@ -82,12 +84,19 @@ func main() {
 	if ImageServerHostname == "" {
 		ImageServerHostname = os.Getenv(IMAGE_SERVER_HOSTNAME_VAR)
 	}
+	if ImageServerHostname == "" {
+		host, err := os.Hostname()
+		if err != nil {
+			log.Fatal("error getting hostname:", err)
+		}
+		ImageServerHostname = host
+	}
 
 	if ImageServerPort == 0 {
 		ImageServerPort, _ = strconv.Atoi(os.Getenv(IMAGE_SERVER_PORT_VAR))
 	}
 	if ImageServerPort == 0 {
-		ImageServerPort = 80
+		ImageServerPort = DEFAULT_PORT
 	}
 
 	if ImageServerDisplayPort == 0 {
@@ -97,11 +106,8 @@ func main() {
 		ImageServerDisplayPort = ImageServerPort
 	}
 
-	port := ":" + strconv.Itoa(ImageServerPort)
-	displayPort := ":" + strconv.Itoa(ImageServerDisplayPort)
-	router := mux.NewRouter().Host(getHostname() + displayPort).Subrouter()
+	router := initRouter()
 	rootRoute := router.PathPrefix("/memes/")
-
 	memepository := NewFileServingMemepository(FileServingMemepositoryConfig{
 		Path:            ImagesDir,
 		ImageExtensions: MakeSet("png", "jpg"),
@@ -137,6 +143,7 @@ func main() {
 		log.Fatalf("error compiling keyword pattern '%s': %s", KeywordPattern, err.Error())
 	}
 
+	port := ":" + strconv.Itoa(ImageServerPort)
 	go func() {
 		err := http.ListenAndServe(port, router)
 		if err != nil {
@@ -144,6 +151,7 @@ func main() {
 		}
 	}()
 	rootUrl, _ := rootRoute.URL()
+	log.Println("image server listening on port", port)
 	log.Println("serving images on", rootUrl)
 
 	bot := &MemeBot{
@@ -157,16 +165,18 @@ func main() {
 	bot.Run(context.Background())
 }
 
-func getHostname() string {
-	if ImageServerHostname != "" {
-		return ImageServerHostname
-	}
+func initRouter() *mux.Router {
+	displayPort := ":" + strconv.Itoa(ImageServerDisplayPort)
+	router := mux.NewRouter().Host(ImageServerHostname + displayPort).Subrouter()
 
-	host, err := os.Hostname()
-	if err != nil {
-		log.Fatal("error getting hostname:", err)
-	}
-	return host
+	// Basic "are you alive?" check.
+	router.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
+		log.Printf("health check from %s (X-Forwarded-For: %s)", req.RemoteAddr, req.Header["X-Forwarded-For"])
+		fmt.Fprintln(w, "Everything looks good!")
+		return
+	})
+
+	return router
 }
 
 func LogConnectionInfo(b *MemeBot) {
