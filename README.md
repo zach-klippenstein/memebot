@@ -5,6 +5,8 @@
 
 Images are currently served only out of a local directory, but S3 support could happen.
 
+Slack integration code is based on https://github.com/rapidloop/mybot (see [slack.go](slack.go)).
+
 ## Installing
 
 You'll need go 1.5.1 or later, and a properly-configured `GOPATH`.
