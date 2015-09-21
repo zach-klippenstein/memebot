@@ -10,7 +10,7 @@ Images are currently served only out of a local directory, but S3 support could 
 You'll need go 1.5.1 or later, and a properly-configured `GOPATH`.
 
     export GO15VENDOREXPERIMENT=1
-    go get github.com/zach-klippenstein/memebot
+    go get github.com/zach-klippenstein/memebot/cmd/memebot
 
 ## Running
 
