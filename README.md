@@ -1,5 +1,5 @@
 
-# memebot [![Build Status](https://travis-ci.org/zach-klippenstein/memebot.svg)](https://travis-ci.org/zach-klippenstein/memebot)
+# memebot
 
 `memebot` is Slack bot that posts images matching keywords.
 
