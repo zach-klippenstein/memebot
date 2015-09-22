@@ -43,6 +43,9 @@ var (
 	ImageServerDisplayPort = flag.Int("serve-display-port", 0,
 		"Port use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to serve-port.")
 
+	OnlyReplyToMentions = flag.Bool("require-mention", true,
+		"If true, messages that don't mention bot will be ignored. If you set this, make sure to specify keyword-pattern!")
+
 	ListKeywordsMode = flag.Bool("list-keywords", false,
 		"Lists the set of keywords without starting the bot")
 
@@ -164,10 +167,15 @@ func startBot(memepository Memepository) {
 		log.Fatalf("error compiling keyword pattern '%s': %s", *KeywordPattern, err.Error())
 	}
 
+	if !*OnlyReplyToMentions {
+		log.Println("WARNING: filtering by mentions is disabled. may be spammy.")
+	}
+
 	bot := &MemeBot{
-		Parser:   RegexpKeywordParser{keywordPattern},
-		Searcher: &MemepositorySearcher{memepository},
-		Handler:  DefaultHandler{},
+		Parser:           RegexpKeywordParser{keywordPattern},
+		Searcher:         &MemepositorySearcher{memepository},
+		ErrorHandler:     DefaultErrorHandler{},
+		ParseAllMessages: !*OnlyReplyToMentions,
 	}
 
 	bot.Dial(slackToken)
