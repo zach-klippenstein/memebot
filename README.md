@@ -29,22 +29,12 @@ Then start the bot with command-line config:
         -serve-display-port 80
         -keyword-pattern "show me (.+)"
 
-…or using environment variables:
-
-    export IMAGES_DIR=/var/memes
-    export PORT=8080
-    export HOSTNAME=my-public-domain.com
-    export DISPLAY_PORT=80
-    export KEYWORD_PATTERN="show me (.+)"
-    memebot
-
 Run `memebot -h` to see usage information.
 
 You can also dump information about the meme repository:
 
-    export IMAGES_DIR=/var/memes
-    memebot -list-keywords
-    memebot -list-memes
+    memebot -images /var/memes -list-keywords
+    memebot -images /var/memes -list-memes
 
 ## Deploying to Heroku
 
@@ -56,7 +46,9 @@ Here's an example of how you'd set this all up (assuming your Heroku app name is
 
     cd $GOPATH/src/github.com/zach-klippenstein/memebot
     git checkout -b deploy
-    echo "web: memebot" >Procfile
+    cat >Procfile <<EOF
+    web memebot -images $IMAGES_DIR -serve-display-port 80 -serve-host $HOSTNAME -keyword-pattern "$KEYWORD_PATTERN"
+    EOF
     mkdir images
     # Add image files.
     git add --all && git commit -m "Initial deployment."

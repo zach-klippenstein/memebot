@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -17,27 +18,39 @@ import (
 )
 
 const (
-	DEFAULT_PORT = 8080
+	DefaultPort = 8080
 
-	SLACK_TOKEN_VAR               = "SLACK_TOKEN"
-	IMAGE_DIR_VAR                 = "IMAGES_DIR"
-	KEYWORD_PATTERN_VAR           = "KEYWORD_PATTERN"
-	IMAGE_SERVER_HOSTNAME_VAR     = "HOSTNAME"
-	IMAGE_SERVER_PORT_VAR         = "PORT"
-	IMAGE_SERVER_DISPLAY_PORT_VAR = "DISPLAY_PORT"
+	SlackTokenVar = "SLACK_TOKEN"
 
-	DEFAULT_KEYWORD_PATTERN = `(\w+)$`
+	DefaultKeywordPattern = `(\w+)$`
 )
 
-var (
-	ImagesDir              string
-	KeywordPattern         string
-	ImageServerHostname    string
-	ImageServerPort        int
-	ImageServerDisplayPort int
+var ImageExtensions = []string{"jpg", "png", "gif"}
 
-	ListKeywordsMode = flag.Bool("list-keywords", false, "lists the set of keywords without starting the bot")
-	ListMemesMode    = flag.Bool("list-memes", false, "lists all memes' URLs")
+var (
+	ImagesDir = flag.String("images", "",
+		"Path of directory containing images named like keyword1[,keyword2,...].")
+
+	KeywordPattern = flag.String("keyword-pattern", DefaultKeywordPattern,
+		"Case-insensitive regex with capture groups used to extract keywords from messages.")
+
+	ImageServerHostname = flag.String("serve-host", "",
+		"Hostname to use in image links.")
+
+	ImageServerPort = flag.Int("serve-port", DefaultPort,
+		"Port to listen on for serving images.")
+
+	ImageServerDisplayPort = flag.Int("serve-display-port", 0,
+		"Port use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to serve-port.")
+
+	ListKeywordsMode = flag.Bool("list-keywords", false,
+		"Lists the set of keywords without starting the bot")
+
+	ListMemesMode = flag.Bool("list-memes", false,
+		"Lists all memes' URLs")
+
+	ServeOnlyMode = flag.Bool("serve-only", false,
+		"Runs the image server without the bot for debugging.")
 )
 
 func init() {
@@ -50,67 +63,33 @@ func init() {
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "The images directory is required, everything else is optional.")
 	}
-
-	flag.StringVar(&ImagesDir, "images", "",
-		"path of directory containing images named like keyword1[,keyword2,...]. Overrides "+IMAGE_DIR_VAR+" environment variable.")
-	flag.StringVar(&KeywordPattern, "keyword-pattern", "",
-		"case-insensitive regex with capture groups used to extract keywords from messages. Overrides "+KEYWORD_PATTERN_VAR+" environment variable. Default is "+DEFAULT_KEYWORD_PATTERN)
-	flag.StringVar(&ImageServerHostname, "serve-host", "",
-		"hostname to use in image links. Overrides "+IMAGE_SERVER_HOSTNAME_VAR+" environment variable.")
-	flag.IntVar(&ImageServerPort, "serve-port", 0,
-		"port to listen on for serving images. Overrides "+IMAGE_SERVER_PORT_VAR+" environment variable.")
-	flag.IntVar(&ImageServerDisplayPort, "serve-display-port", 0,
-		"port use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to the bound port. Overrides "+IMAGE_SERVER_DISPLAY_PORT_VAR+" environment variable.")
 }
 
 func main() {
 	flag.Parse()
 
-	if ImagesDir == "" {
-		ImagesDir = os.Getenv(IMAGE_DIR_VAR)
-	}
-	if ImagesDir == "" {
+	if *ImagesDir == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	if KeywordPattern == "" {
-		KeywordPattern = os.Getenv(KEYWORD_PATTERN_VAR)
-	}
-	if KeywordPattern == "" {
-		KeywordPattern = DEFAULT_KEYWORD_PATTERN
-	}
-
-	if ImageServerHostname == "" {
-		ImageServerHostname = os.Getenv(IMAGE_SERVER_HOSTNAME_VAR)
-	}
-	if ImageServerHostname == "" {
+	if *ImageServerHostname == "" {
 		host, err := os.Hostname()
 		if err != nil {
 			log.Fatal("error getting hostname:", err)
 		}
-		ImageServerHostname = host
+		*ImageServerHostname = host
 	}
 
-	if ImageServerPort == 0 {
-		ImageServerPort, _ = strconv.Atoi(os.Getenv(IMAGE_SERVER_PORT_VAR))
-	}
-	if ImageServerPort == 0 {
-		ImageServerPort = DEFAULT_PORT
+	if *ImageServerDisplayPort == 0 {
+		*ImageServerDisplayPort = *ImageServerPort
 	}
 
-	if ImageServerDisplayPort == 0 {
-		ImageServerDisplayPort, _ = strconv.Atoi(os.Getenv(IMAGE_SERVER_DISPLAY_PORT_VAR))
-	}
-	if ImageServerDisplayPort == 0 {
-		ImageServerDisplayPort = ImageServerPort
-	}
-
-	router := initRouter()
+	router := initRouter(*ImageServerHostname, *ImageServerDisplayPort)
 	rootRoute := router.PathPrefix("/memes/")
 	memepository := NewFileServingMemepository(FileServingMemepositoryConfig{
-		Path:            ImagesDir,
-		ImageExtensions: MakeSet("png", "jpg"),
+		Path:            *ImagesDir,
+		ImageExtensions: MakeSet(ImageExtensions...),
 		Router:          rootRoute.Subrouter(),
 	})
 
@@ -133,41 +112,35 @@ func main() {
 		os.Exit(0)
 	}
 
-	slackToken, found := os.LookupEnv(SLACK_TOKEN_VAR)
-	if !found || slackToken == "" {
-		log.Fatal("Slack token not found. Set ", SLACK_TOKEN_VAR)
-	}
-
-	keywordPattern, err := regexp.Compile("(?i)" + KeywordPattern)
+	port := ":" + strconv.Itoa(*ImageServerPort)
+	listener, err := net.Listen("tcp", port)
 	if err != nil {
-		log.Fatalf("error compiling keyword pattern '%s': %s", KeywordPattern, err.Error())
+		log.Fatal("image server error:", err)
 	}
-
-	port := ":" + strconv.Itoa(ImageServerPort)
-	go func() {
-		err := http.ListenAndServe(port, router)
-		if err != nil {
-			log.Fatal("image server error:", err)
-		}
-	}()
 	rootUrl, _ := rootRoute.URL()
 	log.Println("image server listening on port", port)
 	log.Println("serving images on", rootUrl)
 
-	bot := &MemeBot{
-		Parser:   RegexpKeywordParser{keywordPattern},
-		Searcher: &MemepositorySearcher{memepository},
-		Handler:  DefaultHandler{},
-	}
+	if *ServeOnlyMode {
+		err = http.Serve(listener, router)
+		if err != nil {
+			log.Fatal("image server error:", err)
+		}
+	} else {
+		go func() {
+			err := http.Serve(listener, router)
+			if err != nil {
+				log.Fatal("image server error:", err)
+			}
+		}()
 
-	bot.Dial(slackToken)
-	LogConnectionInfo(bot)
-	bot.Run(context.Background())
+		startBot(memepository)
+	}
 }
 
-func initRouter() *mux.Router {
-	displayPort := ":" + strconv.Itoa(ImageServerDisplayPort)
-	router := mux.NewRouter().Host(ImageServerHostname + displayPort).Subrouter()
+func initRouter(hostname string, displayPort int) *mux.Router {
+	routerAddr := fmt.Sprintf("%s:%d", hostname, displayPort)
+	router := mux.NewRouter().Host(routerAddr).Subrouter()
 
 	// Basic "are you alive?" check.
 	router.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
@@ -179,7 +152,30 @@ func initRouter() *mux.Router {
 	return router
 }
 
-func LogConnectionInfo(b *MemeBot) {
+func startBot(memepository Memepository) {
+	slackToken := os.Getenv(SlackTokenVar)
+	if slackToken == "" {
+		log.Fatal("Slack token not found. Set ", SlackTokenVar)
+	}
+
+	// Make the regexp case-insensitive.
+	keywordPattern, err := regexp.Compile("(?i)" + *KeywordPattern)
+	if err != nil {
+		log.Fatalf("error compiling keyword pattern '%s': %s", *KeywordPattern, err.Error())
+	}
+
+	bot := &MemeBot{
+		Parser:   RegexpKeywordParser{keywordPattern},
+		Searcher: &MemepositorySearcher{memepository},
+		Handler:  DefaultHandler{},
+	}
+
+	bot.Dial(slackToken)
+	logBotInfo(bot)
+	bot.Run(context.Background())
+}
+
+func logBotInfo(b *MemeBot) {
 	log.Print("memebot ready as @", b.Name(), " (^c to exit)")
 
 	log.Println("member of channels:")
