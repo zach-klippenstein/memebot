@@ -39,13 +39,37 @@ type Memepository interface {
 	Load() (*MemeIndex, error)
 }
 
-type FileServingMemepositoryConfig struct {
-	Path            string
-	ImageExtensions StringSet
-	Router          *mux.Router
+type FileSystem interface {
+	ReadDirEntries(path string) ([]os.FileInfo, error)
+	Open(name string) (*os.File, error)
 }
 
-// FileServingMemepository is a Memepository that loads images stored on disk.
+type FileServingMemepositoryConfig struct {
+	Path            string      // Path to images directory.
+	ImageExtensions StringSet   // Extensions to recognize as image files.
+	Router          *mux.Router // Root router to serve image IDs from.
+
+	FileSystem FileSystem // Injectable os wrapper for testing. Zero value delegates to os.
+}
+
+type defaultFileSystem struct{}
+
+func (defaultFileSystem) ReadDirEntries(path string) ([]os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// -1 to read all entries.
+	return file.Readdir(-1)
+}
+
+func (defaultFileSystem) Open(name string) (*os.File, error) {
+	return os.Open(name)
+}
+
+// FileServingMemepository is a Memepository that loads images stored on disk,
+// and serves them from an HTTP server.
 type FileServingMemepository struct {
 	FileServingMemepositoryConfig
 
@@ -63,6 +87,10 @@ var _ ObjectRepository = &FileServingMemepository{}
 func NewFileServingMemepository(config FileServingMemepositoryConfig) *FileServingMemepository {
 	// Convert all extensions to lowercase for matching.
 	config.ImageExtensions = config.ImageExtensions.Apply(strings.ToLower)
+
+	if config.FileSystem == nil {
+		config.FileSystem = defaultFileSystem{}
+	}
 
 	memepository := &FileServingMemepository{
 		FileServingMemepositoryConfig: config,
@@ -88,15 +116,7 @@ func (m *FileServingMemepository) FindObject(id string) (Object, bool) {
 func (m *FileServingMemepository) load() {
 	log.Println("loading memes from", m.Path)
 
-	file, err := os.Open(m.Path)
-	if err != nil {
-		log.Println("error opening directory:", err)
-		m.loadErr = err
-		return
-	}
-
-	// -1 to read all entries.
-	entries, err := file.Readdir(-1)
+	entries, err := m.FileSystem.ReadDirEntries(m.Path)
 	if err != nil {
 		log.Println("error reading directory:", err)
 		m.loadErr = err
@@ -127,9 +147,7 @@ func (m *FileServingMemepository) isImageFile(file os.FileInfo) bool {
 		return false
 	}
 
-	extension := filepath.Ext(file.Name())
-	extension = strings.TrimPrefix(extension, ".")
-	extension = strings.ToLower(extension)
+	extension := getNormalizedExtensionWithoutDot(file.Name())
 	_, found := m.ImageExtensions[extension]
 	return found
 }
@@ -148,12 +166,12 @@ var _ Object = &FileMeme{}
 func newFileMeme(file os.FileInfo, owner *FileServingMemepository) (*FileMeme, error) {
 	path := filepath.Join(owner.Path, file.Name())
 
-	id, err := generateHashForFile(path)
+	id, err := generateHashForFile(owner.FileSystem, path)
 	if err != nil {
 		return nil, err
 	}
 	// Append the extension to the ID for content-type detection
-	id = id + filepath.Ext(file.Name())
+	id = id + "." + getNormalizedExtensionWithoutDot(file.Name())
 
 	return &FileMeme{
 		owner:        owner,
@@ -180,7 +198,7 @@ func (m *FileMeme) Keywords() []string {
 }
 
 func (m *FileMeme) Open() (ReadSeekerCloser, error) {
-	return os.Open(m.path)
+	return m.owner.FileSystem.Open(m.path)
 }
 
 func (m *FileMeme) LastModified() time.Time {
@@ -191,8 +209,15 @@ func (m *FileMeme) Size() int64 {
 	return m.size
 }
 
-func generateHashForFile(name string) (string, error) {
-	file, err := os.Open(name)
+func getNormalizedExtensionWithoutDot(name string) (extension string) {
+	extension = filepath.Ext(name)
+	extension = strings.TrimPrefix(extension, ".")
+	extension = strings.ToLower(extension)
+	return
+}
+
+func generateHashForFile(fs FileSystem, name string) (string, error) {
+	file, err := fs.Open(name)
 	if err != nil {
 		return "", err
 	}
