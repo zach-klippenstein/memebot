@@ -40,7 +40,7 @@ func (p RegexpKeywordParser) ParseKeyword(msg string) (string, bool) {
 
 type MemeSearcher interface {
 	// Returns ErrNoMemeFound if no meme could be found.
-	FindMeme(ctx context.Context, keyword string) (Meme, error)
+	FindMeme(keyword string) (Meme, error)
 }
 
 // ErrNoMemeFound is returned from MemeSearcher.FindMeme.
@@ -151,7 +151,7 @@ func (b *MemeBot) handleMessage(ctx context.Context, m Message) {
 		return
 	}
 
-	meme, err := b.Searcher.FindMeme(ctx, keyword)
+	meme, err := b.Searcher.FindMeme(keyword)
 	if err == ErrNoMemeFound {
 		if b.isSelfMentioned(m) {
 			// Only log if the bot was mentioned to prevent possibly leaking

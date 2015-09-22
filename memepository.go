@@ -34,6 +34,11 @@ func (s StringSet) Apply(f func(string) string) (result StringSet) {
 	return
 }
 
+func (s StringSet) Contains(str string) bool {
+	_, found := s[str]
+	return found
+}
+
 type Memepository interface {
 	// Load should be safe to call from multiple goroutines.
 	Load() (*MemeIndex, error)
@@ -41,7 +46,7 @@ type Memepository interface {
 
 type FileSystem interface {
 	ReadDirEntries(path string) ([]os.FileInfo, error)
-	Open(name string) (*os.File, error)
+	Open(name string) (ReadSeekerCloser, error)
 }
 
 type FileServingMemepositoryConfig struct {
@@ -64,7 +69,7 @@ func (defaultFileSystem) ReadDirEntries(path string) ([]os.FileInfo, error) {
 	return file.Readdir(-1)
 }
 
-func (defaultFileSystem) Open(name string) (*os.File, error) {
+func (defaultFileSystem) Open(name string) (ReadSeekerCloser, error) {
 	return os.Open(name)
 }
 
@@ -148,8 +153,7 @@ func (m *FileServingMemepository) isImageFile(file os.FileInfo) bool {
 	}
 
 	extension := getNormalizedExtensionWithoutDot(file.Name())
-	_, found := m.ImageExtensions[extension]
-	return found
+	return m.ImageExtensions.Contains(extension)
 }
 
 type FileMeme struct {
@@ -183,10 +187,18 @@ func newFileMeme(file os.FileInfo, owner *FileServingMemepository) (*FileMeme, e
 	}, nil
 }
 
-func parseKeywords(name string) []string {
+func parseKeywords(name string) (keywords []string) {
 	extension := filepath.Ext(name)
 	nameWithoutExtension := strings.TrimSuffix(name, extension)
-	return strings.Split(nameWithoutExtension, ",")
+	tokens := strings.Split(nameWithoutExtension, ",")
+
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token != "" {
+			keywords = append(keywords, token)
+		}
+	}
+	return
 }
 
 func (m *FileMeme) URL() *url.URL {

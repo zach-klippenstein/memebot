@@ -1,10 +1,6 @@
 package memebot
 
-import (
-	"math/rand"
-
-	"golang.org/x/net/context"
-)
+import "math/rand"
 
 type MemepositorySearcher struct {
 	Memepository
@@ -12,7 +8,7 @@ type MemepositorySearcher struct {
 
 var _ MemeSearcher = &MemepositorySearcher{}
 
-func (s *MemepositorySearcher) FindMeme(ctx context.Context, keyword string) (Meme, error) {
+func (s *MemepositorySearcher) FindMeme(keyword string) (Meme, error) {
 	memes, err := s.Load()
 	if err != nil {
 		return nil, err
