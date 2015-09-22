@@ -124,6 +124,10 @@ func main() {
 	log.Println("image server listening on port", port)
 	log.Println("serving images on", rootUrl)
 
+	defer func() {
+		log.Println("exiting...")
+	}()
+
 	if *ServeOnlyMode {
 		err = http.Serve(listener, router)
 		if err != nil {
