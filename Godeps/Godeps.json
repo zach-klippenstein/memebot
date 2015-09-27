@@ -11,6 +11,11 @@
 			"Rev": "49c024275504f0341e5a9971eb7ba7fa3dc7af40"
 		},
 		{
+			"ImportPath": "github.com/nlopes/slack",
+			"Comment": "v0.0.1-57-gaaf5585",
+			"Rev": "aaf55856f05a90dac5b934d489d6c3d14e8602a6"
+		},
+		{
 			"ImportPath": "github.com/stretchr/objx",
 			"Rev": "cbeaeb16a013161a98496fad62933b1d21786672"
 		},

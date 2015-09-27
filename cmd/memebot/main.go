@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -29,39 +30,40 @@ var ImageExtensions = []string{"jpg", "png", "gif"}
 
 var (
 	ImagesDir = flag.String("images", "",
-		"Path of directory containing images named like keyword1[,keyword2,...].")
+		"path of `directory` containing images named like keyword1[,keyword2,...].")
 
 	KeywordPattern = flag.String("keyword-pattern", DefaultKeywordPattern,
-		"Case-insensitive regex with capture groups used to extract keywords from messages.")
+		"case-insensitive `regex` with capture groups used to extract keywords from messages.")
 
 	ImageServerHostname = flag.String("serve-host", "",
-		"Hostname to use in image links.")
+		"`hostname` to use in image links.")
 
 	ImageServerPort = flag.Int("serve-port", DefaultPort,
-		"Port to listen on for serving images.")
+		"`port` to listen on for serving images.")
 
 	ImageServerDisplayPort = flag.Int("serve-display-port", 0,
-		"Port use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to serve-port.")
+		"`port` use in image links. Maybe be different from -serve-port if your load balancer forwards 80 to 5000, e.g. Defaults to serve-port.")
 
 	OnlyReplyToMentions = flag.Bool("require-mention", true,
-		"If true, messages that don't mention bot will be ignored. If you set this, make sure to specify keyword-pattern!")
+		"if true, messages that don't mention bot will be ignored. If you set this, make sure to specify keyword-pattern!")
 
 	ListKeywordsMode = flag.Bool("list-keywords", false,
-		"Lists the set of keywords without starting the bot")
+		"lists the set of keywords without starting the bot")
 
 	ListMemesMode = flag.Bool("list-memes", false,
-		"Lists all memes' URLs")
+		"lists all memes' URLs")
 
 	ServeOnlyMode = flag.Bool("serve-only", false,
-		"Runs the image server without the bot for debugging.")
+		"runs the image server without the bot for debugging.")
 )
 
 func init() {
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage of %s:", os.Args[0])
-		fmt.Fprintln(os.Stderr, os.Args[0], "-images path [options...]")
-		fmt.Fprintln(os.Stderr, os.Args[0], "-list-keywords")
-		fmt.Fprintln(os.Stderr, os.Args[0], "-list-memes")
+		name := filepath.Base(os.Args[0])
+		fmt.Fprintln(os.Stderr, "Usage:")
+		fmt.Fprintln(os.Stderr, name, "-images path [options...]")
+		fmt.Fprintln(os.Stderr, name, "-list-keywords")
+		fmt.Fprintln(os.Stderr, name, "-list-memes")
 		fmt.Fprintln(os.Stderr)
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "The images directory is required, everything else is optional.")
@@ -175,27 +177,21 @@ func startBot(memepository Memepository) {
 		log.Println("WARNING: filtering by mentions is disabled. may be spammy.")
 	}
 
-	bot := &MemeBot{
-		Parser:           RegexpKeywordParser{keywordPattern},
+	parser := RegexpKeywordParser{keywordPattern}
+
+	log.Println("connecting to slack...")
+	bot, err := NewMemeBot(slackToken, MemeBotConfig{
+		Parser:           parser,
 		Searcher:         &MemepositorySearcher{memepository},
-		ErrorHandler:     DefaultErrorHandler{},
 		ParseAllMessages: !*OnlyReplyToMentions,
+		Log:              log.New(os.Stderr, "", log.LstdFlags),
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	bot.Dial(slackToken)
-	logBotInfo(bot)
+	log.Print("memebot ready as @", bot.Name(), " (^c to exit)")
+	log.Println("matching keywords on", parser)
+
 	bot.Run(context.Background())
-}
-
-func logBotInfo(b *MemeBot) {
-	log.Print("memebot ready as @", b.Name(), " (^c to exit)")
-
-	log.Println("member of channels:")
-	for _, channel := range b.Channels() {
-		if channel.IsMember {
-			log.Println("  ", channel.Name)
-		}
-	}
-
-	log.Println("matching keywords on", b.Parser)
 }

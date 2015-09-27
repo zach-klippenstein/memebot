@@ -3,12 +3,14 @@ package memebot
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/nlopes/slack"
 	"golang.org/x/net/context"
-	"golang.org/x/net/websocket"
 )
 
 type KeywordParser interface {
@@ -61,10 +63,15 @@ func (DefaultErrorHandler) OnPhraseNotUnderstood(phrase string) string {
 	return fmt.Sprintln("Sorry, I'm not sure what you mean by:\n>", phrase)
 }
 
-type MemeBot struct {
-	Parser       KeywordParser
-	Searcher     MemeSearcher
+type MemeBotConfig struct {
+	Parser   KeywordParser
+	Searcher MemeSearcher
+
+	// Defaults to DefaultErrorHandler{}.
 	ErrorHandler ErrorHandler
+
+	// Default will not print any log messages.
+	Log *log.Logger
 
 	// If a message hasn't been replied to in this time, don't reply.
 	// Prevents the bot from replying to messages too late and not making sense.
@@ -75,118 +82,182 @@ type MemeBot struct {
 	// The ErrorHandler's OnPhraseNotUnderstood will still only be called if the
 	// bot was mentioned.
 	ParseAllMessages bool
-
-	startResponse *ResponseRtmStart
-	ws            *websocket.Conn
 }
 
-func (b *MemeBot) Dial(authToken string) {
-	log.Println("connecting to Slack...")
+type MemeBot struct {
+	config MemeBotConfig
 
-	if b.ws != nil {
-		log.Panic("bot already connected")
+	rtm       *slack.RTM
+	slackInfo *slack.Info
+
+	// Map of channel ID to channel.
+	channels map[string]*slack.Channel
+}
+
+var (
+	ErrInvalidAuthToken = errors.New("invalid auth token")
+	ErrConnectionFailed = errors.New("failed to connect to slack")
+)
+
+const DefaultReplyTimeout = 5 * time.Second
+
+func NewMemeBot(authToken string, config MemeBotConfig) (bot *MemeBot, err error) {
+	// Setup default config values.
+	if config.Parser == nil {
+		panic("Parser must be specified")
+	}
+	if config.Searcher == nil {
+		panic("Searcher must be specified")
+	}
+	if config.ErrorHandler == nil {
+		config.ErrorHandler = DefaultErrorHandler{}
+	}
+	if config.MaxReplyTimeout <= 0 {
+		config.MaxReplyTimeout = DefaultReplyTimeout
+	}
+	if config.Log == nil {
+		config.Log = log.New(ioutil.Discard, "", 0)
 	}
 
-	ws, startResponse, err := slackConnect(authToken)
-	if err != nil {
-		log.Fatal("error connecting to slack:", err)
+	bot = &MemeBot{
+		config:   config,
+		channels: make(map[string]*slack.Channel),
+	}
+	err = bot.dial(authToken)
+	return
+}
+
+func (b *MemeBot) dial(authToken string) error {
+	if b.rtm != nil {
+		panic("bot already connected")
 	}
 
-	b.startResponse = startResponse
-	b.ws = ws
-}
+	client := slack.New(authToken)
+	b.rtm = client.NewRTM()
 
-func (b *MemeBot) Name() string {
-	return b.startResponse.Self.Name
-}
-
-func (b *MemeBot) Channels() []Channel {
-	return b.startResponse.Channels
-}
-
-func (b *MemeBot) Run(ctx context.Context) {
-	defer b.Close()
-
-	for {
-		// read each incoming message
-		m, err := getMessage(ctx, b.ws)
-		if err != nil {
-			log.Println("error reading message from websocket:", err)
-		}
-
-		if m.IsMessage() {
-			go b.handleMessage(ctx, m)
-		}
-	}
-}
-
-func (b *MemeBot) Close() error {
-	if b.ws != nil {
-		return b.ws.Close()
+	go b.rtm.ManageConnection()
+	if err := b.waitForConnection(); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (b *MemeBot) maxReplyTimeout() time.Duration {
-	if b.MaxReplyTimeout > 0 {
-		return b.MaxReplyTimeout
+func (b *MemeBot) waitForConnection() error {
+	for {
+		rawEvent := <-b.rtm.IncomingEvents
+		b.config.Log.Println("[slack]", rawEvent.Type)
+		switch event := rawEvent.Data.(type) {
+
+		case *slack.ConnectionErrorEvent:
+			b.config.Log.Println("[slack]", event.Attempt, "errors connecting:", event)
+			if event.Attempt > 3 {
+				return ErrConnectionFailed
+			}
+
+		case *slack.InvalidAuthEvent:
+			return ErrInvalidAuthToken
+
+		case *slack.ConnectedEvent:
+			b.slackInfo = event.Info
+			for _, ch := range event.Info.Channels {
+				b.addChannel(&ch)
+			}
+			return nil
+		}
 	}
-	return 5 * time.Second
 }
 
-func (b *MemeBot) handleMessage(ctx context.Context, m Message) {
-	if !(b.ParseAllMessages || b.isSelfMentioned(m)) {
+func (b *MemeBot) addChannel(ch *slack.Channel) {
+	b.config.Log.Print("[slack] joined channel #", ch.Name)
+	b.channels[ch.ID] = ch
+}
+
+func (b *MemeBot) removeChannel(id string) {
+	if ch, found := b.channels[id]; found {
+		b.config.Log.Print("[slack] left channel #", ch.Name)
+		delete(b.channels, id)
+	}
+}
+
+func (b *MemeBot) Name() string {
+	return b.slackInfo.User.Name
+}
+
+func (b *MemeBot) Run(ctx context.Context) {
+	defer b.rtm.Disconnect()
+
+	for {
+		select {
+
+		case rawEvent := <-b.rtm.IncomingEvents:
+			switch event := rawEvent.Data.(type) {
+
+			case *slack.MessageEvent:
+				go b.handleMessage(ctx, (*slack.Message)(event))
+			case *slack.ChannelJoinedEvent:
+				b.addChannel(&event.Channel)
+			case *slack.ChannelLeftEvent:
+				b.removeChannel(event.Channel)
+			case *slack.RTMError:
+				b.config.Log.Println("[slack] RTM error:", rawEvent.Type)
+			case *slack.LatencyReport:
+				b.config.Log.Println("[slack] current latency:", event.Value)
+			}
+
+		case <-ctx.Done():
+			b.config.Log.Println("context done, stopping bot...")
+			return
+		}
+	}
+}
+
+func (b *MemeBot) handleMessage(ctx context.Context, m *slack.Message) {
+	if !(b.config.ParseAllMessages || b.isSelfMentioned(m)) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, b.maxReplyTimeout())
+	ctx, cancel := context.WithTimeout(ctx, b.config.MaxReplyTimeout)
 	defer cancel()
 
-	keyword, matched := b.Parser.ParseKeyword(m.Text)
+	keyword, matched := b.config.Parser.ParseKeyword(m.Text)
 	if !matched {
 		if b.isSelfMentioned(m) {
-			reply := b.ErrorHandler.OnPhraseNotUnderstood(m.Text)
-			b.postMessage(ctx, m.Reply(reply))
+			b.replyTo(ctx, m, b.config.ErrorHandler.OnPhraseNotUnderstood(m.Text))
 		}
 		return
 	}
 
-	meme, err := b.Searcher.FindMeme(keyword)
+	meme, err := b.config.Searcher.FindMeme(keyword)
 	if err == ErrNoMemeFound {
 		if b.isSelfMentioned(m) {
 			// Only log if the bot was mentioned to prevent possibly leaking
 			// sensitive messages to logs.
-			log.Println("no meme found for keyword:", keyword)
-			reply := b.ErrorHandler.OnNoMemeFound(keyword)
-			b.postMessage(ctx, m.Reply(reply))
+			b.config.Log.Println("no meme found for keyword:", keyword)
+			b.replyTo(ctx, m, b.config.ErrorHandler.OnNoMemeFound(keyword))
 		}
 		return
 	} else if err != nil {
 		if b.isSelfMentioned(m) {
 			// Only log if the bot was mentioned to prevent possibly leaking
 			// sensitive messages to logs.
-			log.Printf("error searching for '%s': %s", keyword, err)
-			reply := b.ErrorHandler.OnNoMemeFound(keyword)
-			b.postMessage(ctx, m.Reply(reply))
+			b.config.Log.Printf("error searching for '%s': %s", keyword, err)
+			b.replyTo(ctx, m, b.config.ErrorHandler.OnNoMemeFound(keyword))
 		}
 		return
 	}
 
-	b.postMessage(ctx, m.Reply(meme.URL().String()))
+	b.replyTo(ctx, m, meme.URL().String())
 }
 
-func (b *MemeBot) isSelfMentioned(m Message) bool {
-	return m.IsUserMentioned(b.startResponse.Self.Id)
+func (b *MemeBot) isSelfMentioned(m *slack.Message) bool {
+	return strings.HasPrefix(m.Text, "<@"+b.slackInfo.User.ID+">")
 }
 
-func (b *MemeBot) postMessage(ctx context.Context, msg Message) {
+func (b *MemeBot) replyTo(ctx context.Context, msg *slack.Message, replyText string) {
 	select {
 	case <-ctx.Done():
-		log.Print("context done, not sending reply:", ctx.Err(), "\n\t", msg)
-		return
+		b.config.Log.Print("context done, not sending reply:", ctx.Err(), "\n\t", msg)
 	default:
-		if err := postMessage(b.ws, msg); err != nil {
-			log.Print("error posting message:", err, "\n\t", msg)
-		}
+		b.rtm.SendMessage(b.rtm.NewOutgoingMessage(replyText, msg.Channel))
 	}
 }
