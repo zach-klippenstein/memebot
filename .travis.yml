@@ -1,0 +1,10 @@
+language: go
+
+go:
+  - 1.5.1
+
+env:
+  - GO15VENDOREXPERIMENT=1
+
+script:
+  - go test $(go list ./... | grep -v /vendor/)
