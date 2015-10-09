@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -167,21 +166,18 @@ func startBot(memepository Memepository) {
 		log.Fatal("Slack token not found. Set ", SlackTokenVar)
 	}
 
-	// Make the regexp case-insensitive.
-	keywordPattern, err := regexp.Compile("(?i)" + *KeywordPattern)
+	parser, err := NewRegexpKeywordParser(*KeywordPattern)
 	if err != nil {
-		log.Fatalf("error compiling keyword pattern '%s': %s", *KeywordPattern, err.Error())
+		log.Fatalf("error compiling keyword pattern '%s': %s", *KeywordPattern, err)
 	}
 
 	if !*OnlyReplyToMentions {
 		log.Println("WARNING: filtering by mentions is disabled. may be spammy.")
 	}
 
-	parser := RegexpKeywordParser{keywordPattern}
-
 	log.Println("connecting to slack...")
 	bot, err := NewMemeBot(slackToken, MemeBotConfig{
-		Parser:           parser,
+		Parser:           MessageParser{KeywordParser: parser},
 		Searcher:         &MemepositorySearcher{memepository},
 		ParseAllMessages: !*OnlyReplyToMentions,
 		Log:              log.New(os.Stderr, "", log.LstdFlags),
