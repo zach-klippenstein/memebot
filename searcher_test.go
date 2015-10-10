@@ -48,11 +48,3 @@ func TestMemepositorySearcherPicksRandomMeme(t *testing.T) {
 	assert.True(t, fooCount > 0)
 	assert.True(t, barCount > 0)
 }
-
-type MockMemepository struct {
-	index *MemeIndex
-}
-
-func (m *MockMemepository) Load() (*MemeIndex, error) {
-	return m.index, nil
-}
