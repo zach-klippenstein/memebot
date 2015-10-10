@@ -131,5 +131,5 @@ func (p RegexpKeywordParser) ParseKeyword(msg string) (string, bool) {
 
 func (p RegexpKeywordParser) GenerateSample() string {
 	// TODO Use goregen.
-	return "a string matching “" + p.Regexp.String() + "”"
+	return "a string matching /" + p.Regexp.String() + "/"
 }

@@ -60,6 +60,25 @@ type MemeBotConfig struct {
 	ParseAllMessages bool
 }
 
+func (c *MemeBotConfig) Validate() error {
+	// Setup default config values.
+	if c.ErrorHandler == nil {
+		c.ErrorHandler = DefaultErrorHandler{}
+	}
+	if c.MaxReplyTimeout <= 0 {
+		c.MaxReplyTimeout = DefaultReplyTimeout
+	}
+	if c.Log == nil {
+		c.Log = log.New(ioutil.Discard, "", 0)
+	}
+
+	if err := c.Parser.Validate(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type MemeBot struct {
 	config MemeBotConfig
 
@@ -83,18 +102,7 @@ func NewMemeBot(authToken string, config MemeBotConfig) (bot *MemeBot, err error
 		return
 	}
 
-	// Setup default config values.
-	if config.ErrorHandler == nil {
-		config.ErrorHandler = DefaultErrorHandler{}
-	}
-	if config.MaxReplyTimeout <= 0 {
-		config.MaxReplyTimeout = DefaultReplyTimeout
-	}
-	if config.Log == nil {
-		config.Log = log.New(ioutil.Discard, "", 0)
-	}
-
-	if err = config.Parser.Validate(); err != nil {
+	if err = config.Validate(); err != nil {
 		return
 	}
 

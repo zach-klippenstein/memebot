@@ -20,23 +20,6 @@ func TestMemes(t *testing.T) {
 	assert.Len(t, memes.FindByKeyword("bar"), 2)
 }
 
-func NewMockMeme(url string, keywords ...string) Meme {
-	return MockMeme{mustParseURL(url), keywords}
-}
-
-type MockMeme struct {
-	url      *url.URL
-	keywords []string
-}
-
-func (m MockMeme) URL() *url.URL {
-	return m.url
-}
-
-func (m MockMeme) Keywords() []string {
-	return m.keywords
-}
-
 func NewTestMemeIndex(memes ...Meme) *MemeIndex {
 	index := NewMemeIndex()
 	for _, meme := range memes {

@@ -2,13 +2,10 @@ package memebot
 
 import (
 	"bytes"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 func TestStringSet(t *testing.T) {
@@ -56,48 +53,5 @@ func (b Buffer) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (b Buffer) Close() error {
-	return nil
-}
-
-type MockFileSystem struct {
-	mock.Mock
-}
-
-func (m *MockFileSystem) ReadDirEntries(path string) ([]os.FileInfo, error) {
-	args := m.Called(path)
-	return args.Get(0).([]os.FileInfo), args.Error(1)
-}
-
-func (m *MockFileSystem) Open(name string) (ReadSeekerCloser, error) {
-	args := m.Called(name)
-	return args.Get(0).(ReadSeekerCloser), args.Error(1)
-}
-
-type MockFileInfo struct {
-	name    string
-	modTime time.Time
-}
-
-func (m MockFileInfo) Name() string {
-	return m.name
-}
-
-func (m MockFileInfo) Size() int64 {
-	return 0
-}
-
-func (m MockFileInfo) Mode() os.FileMode {
-	return 0
-}
-
-func (m MockFileInfo) ModTime() time.Time {
-	return m.modTime
-}
-
-func (m MockFileInfo) IsDir() bool {
-	return false
-}
-
-func (m MockFileInfo) Sys() interface{} {
 	return nil
 }
