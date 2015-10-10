@@ -5,40 +5,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/nlopes/slack"
 	"golang.org/x/net/context"
 )
-
-type KeywordParser interface {
-	ParseKeyword(msg string) (keyword string, matched bool)
-}
-
-type RegexpKeywordParser struct {
-	*regexp.Regexp
-}
-
-func (p RegexpKeywordParser) ParseKeyword(msg string) (string, bool) {
-	matches := p.FindStringSubmatch(msg)
-	if len(matches) < 2 {
-		return "", false
-	}
-	// Ignore the full-string match.
-	matches = matches[1:]
-
-	// Find the first non-empty capture group value.
-	// First element is the entire matched string, we only care about capture groups.
-	for _, match := range matches {
-		if match != "" {
-			return match, true
-		}
-	}
-
-	return "", false
-}
 
 type MemeSearcher interface {
 	// Returns ErrNoMemeFound if no meme could be found.
@@ -50,21 +21,26 @@ var ErrNoMemeFound = errors.New("no meme found")
 
 type ErrorHandler interface {
 	OnNoMemeFound(keyword string) (reply string)
-	OnPhraseNotUnderstood(phrase string) (reply string)
+	OnPhraseNotUnderstood(phrase, sample string) (reply string)
+	OnHelp(sample string) (reply string)
 }
 
 type DefaultErrorHandler struct{}
 
-func (DefaultErrorHandler) OnNoMemeFound(keyword string) string {
-	return fmt.Sprintf("Sorry, I couldn't find a meme for “%s”", keyword)
+func (h DefaultErrorHandler) OnNoMemeFound(keyword string) string {
+	return fmt.Sprintf("Sorry, I couldn't find a meme for “%s”.", keyword)
 }
 
-func (DefaultErrorHandler) OnPhraseNotUnderstood(phrase string) string {
-	return fmt.Sprintln("Sorry, I'm not sure what you mean by:\n>", phrase)
+func (h DefaultErrorHandler) OnPhraseNotUnderstood(phrase, sample string) string {
+	return fmt.Sprintf("Sorry, I'm not sure what you mean by:\n> %s\n%s", phrase, h.OnHelp(sample))
+}
+
+func (DefaultErrorHandler) OnHelp(sample string) string {
+	return fmt.Sprint("Try ", sample)
 }
 
 type MemeBotConfig struct {
-	Parser   KeywordParser
+	Parser   MessageParser
 	Searcher MemeSearcher
 
 	// Defaults to DefaultErrorHandler{}.
@@ -91,7 +67,7 @@ type MemeBot struct {
 	slackInfo *slack.Info
 
 	// Map of channel ID to channel.
-	channels map[string]*slack.Channel
+	channelsById map[string]*slack.Channel
 }
 
 var (
@@ -102,13 +78,12 @@ var (
 const DefaultReplyTimeout = 5 * time.Second
 
 func NewMemeBot(authToken string, config MemeBotConfig) (bot *MemeBot, err error) {
-	// Setup default config values.
-	if config.Parser == nil {
-		panic("Parser must be specified")
-	}
 	if config.Searcher == nil {
-		panic("Searcher must be specified")
+		err = errors.New("Searcher must be specified")
+		return
 	}
+
+	// Setup default config values.
 	if config.ErrorHandler == nil {
 		config.ErrorHandler = DefaultErrorHandler{}
 	}
@@ -119,9 +94,13 @@ func NewMemeBot(authToken string, config MemeBotConfig) (bot *MemeBot, err error
 		config.Log = log.New(ioutil.Discard, "", 0)
 	}
 
+	if err = config.Parser.Validate(); err != nil {
+		return
+	}
+
 	bot = &MemeBot{
-		config:   config,
-		channels: make(map[string]*slack.Channel),
+		config:       config,
+		channelsById: make(map[string]*slack.Channel),
 	}
 	err = bot.dial(authToken)
 	return
@@ -169,13 +148,13 @@ func (b *MemeBot) waitForConnection() error {
 
 func (b *MemeBot) addChannel(ch *slack.Channel) {
 	b.config.Log.Print("[slack] joined channel #", ch.Name)
-	b.channels[ch.ID] = ch
+	b.channelsById[ch.ID] = ch
 }
 
 func (b *MemeBot) removeChannel(id string) {
-	if ch, found := b.channels[id]; found {
+	if ch, found := b.channelsById[id]; found {
 		b.config.Log.Print("[slack] left channel #", ch.Name)
-		delete(b.channels, id)
+		delete(b.channelsById, id)
 	}
 }
 
@@ -212,45 +191,52 @@ func (b *MemeBot) Run(ctx context.Context) {
 }
 
 func (b *MemeBot) handleMessage(ctx context.Context, m *slack.Message) {
-	if !(b.config.ParseAllMessages || b.isSelfMentioned(m)) {
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, b.config.MaxReplyTimeout)
 	defer cancel()
 
-	keyword, matched := b.config.Parser.ParseKeyword(m.Text)
-	if !matched {
-		if b.isSelfMentioned(m) {
-			b.replyTo(ctx, m, b.config.ErrorHandler.OnPhraseNotUnderstood(m.Text))
-		}
-		return
+	replyText := handleMessage(b.slackInfo.User, b.config, m)
+	if replyText != "" {
+		b.replyTo(ctx, m, replyText)
 	}
-
-	meme, err := b.config.Searcher.FindMeme(keyword)
-	if err == ErrNoMemeFound {
-		if b.isSelfMentioned(m) {
-			// Only log if the bot was mentioned to prevent possibly leaking
-			// sensitive messages to logs.
-			b.config.Log.Println("no meme found for keyword:", keyword)
-			b.replyTo(ctx, m, b.config.ErrorHandler.OnNoMemeFound(keyword))
-		}
-		return
-	} else if err != nil {
-		if b.isSelfMentioned(m) {
-			// Only log if the bot was mentioned to prevent possibly leaking
-			// sensitive messages to logs.
-			b.config.Log.Printf("error searching for '%s': %s", keyword, err)
-			b.replyTo(ctx, m, b.config.ErrorHandler.OnNoMemeFound(keyword))
-		}
-		return
-	}
-
-	b.replyTo(ctx, m, meme.URL().String())
 }
 
-func (b *MemeBot) isSelfMentioned(m *slack.Message) bool {
-	return strings.HasPrefix(m.Text, "<@"+b.slackInfo.User.ID+">")
+func handleMessage(self *slack.UserDetails, config MemeBotConfig, m *slack.Message) string {
+	keyword, mentioned, help := config.Parser.ParseMessage(self.Name, self.ID, m.Text)
+	sample := config.Parser.KeywordParser.GenerateSample
+
+	if !mentioned && !config.ParseAllMessages {
+		return ""
+	}
+
+	if help {
+		return config.ErrorHandler.OnHelp(sample())
+	}
+
+	if keyword == "" {
+		if mentioned {
+			return config.ErrorHandler.OnPhraseNotUnderstood(m.Text, sample())
+		}
+		return ""
+	}
+
+	meme, err := config.Searcher.FindMeme(keyword)
+	if err == ErrNoMemeFound {
+		if mentioned {
+			// Only log if the bot was mentioned to prevent possibly leaking
+			// sensitive messages to logs.
+			config.Log.Println("no meme found for keyword:", keyword)
+			return config.ErrorHandler.OnNoMemeFound(keyword)
+		}
+		return ""
+	} else if err != nil {
+		if mentioned {
+			config.Log.Printf("error searching for '%s': %s", keyword, err)
+			return config.ErrorHandler.OnNoMemeFound(keyword)
+		}
+		return ""
+	}
+
+	return meme.URL().String()
 }
 
 func (b *MemeBot) replyTo(ctx context.Context, msg *slack.Message, replyText string) {
