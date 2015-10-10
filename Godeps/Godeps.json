@@ -2,8 +2,7 @@
 	"ImportPath": "github.com/zach-klippenstein/memebot",
 	"GoVersion": "go1.5.1",
 	"Packages": [
-		".",
-		"./cmd/memebot"
+		"."
 	],
 	"Deps": [
 		{
@@ -30,6 +29,11 @@
 		},
 		{
 			"ImportPath": "github.com/stretchr/testify/mock",
+			"Comment": "v1.0-40-g7c2b1e5",
+			"Rev": "7c2b1e5640dcf2631213ca962d892bffa1e08860"
+		},
+		{
+			"ImportPath": "github.com/stretchr/testify/require",
 			"Comment": "v1.0-40-g7c2b1e5",
 			"Rev": "7c2b1e5640dcf2631213ca962d892bffa1e08860"
 		},
