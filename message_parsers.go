@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"unicode"
+
+	regen "github.com/zach-klippenstein/goregen"
 )
 
 var DefaultHelpParser = func(msg string) bool {
@@ -27,7 +30,7 @@ func (p *MessageParser) Validate() error {
 		return errors.New("KeywordParser must be specified")
 	}
 	if p.MentionParser == nil {
-		p.MentionParser = SlackPrefixMentionParser
+		p.MentionParser = SlackPrefixMentionParser{}
 	}
 	if p.HelpParser == nil {
 		p.HelpParser = DefaultHelpParser
@@ -40,7 +43,7 @@ func (p *MessageParser) ParseMessage(mentionedUser, userId, msg string) (keyword
 		panic(err)
 	}
 
-	msg, mentioned = p.MentionParser(mentionedUser, userId, msg)
+	msg, mentioned = p.MentionParser.ParseMention(mentionedUser, userId, msg)
 
 	if p.HelpParser(msg) && mentioned {
 		// Only look for help if mentioned.
@@ -56,12 +59,31 @@ func (p *MessageParser) ParseMessage(mentionedUser, userId, msg string) (keyword
 	return
 }
 
+// GenerateSample generates a sample message.
+// If userName is non-empty, formats the message with a mention.
+func (p *MessageParser) GenerateSample(userName string) string {
+	sample := p.KeywordParser.GenerateSample()
+
+	if userName != "" {
+		sample = p.MentionParser.FormatMention(userName, sample)
+	}
+
+	return sample
+}
+
 // If msg contains a mention of mentionedUser (e.g. "mentionedUser foo bar" or "@mentionedUser: foo bar"),
 // returns ("foo bar", true). If it doesn't contain the username, returns (msg, false).
-type MentionParser func(mentionedUserName, userId, msg string) (cleanMsg string, mentioned bool)
+type MentionParser interface {
+	ParseMention(mentionedUserName, userId, msg string) (cleanMsg string, mentioned bool)
 
-func SlackPrefixMentionParser(name, id, msg string) (cleanMsg string, mentioned bool) {
-	for _, prefix := range []string{name, "<@" + id + ">"} {
+	// FormatMentions a mention to msg as it would be displayed in a Slack client.
+	FormatMention(userName, msg string) string
+}
+
+type SlackPrefixMentionParser struct{}
+
+func (SlackPrefixMentionParser) ParseMention(mentionedUserName, userId, msg string) (cleanMsg string, mentioned bool) {
+	for _, prefix := range []string{mentionedUserName, "<@" + userId + ">"} {
 		if mentioned = strings.HasPrefix(msg, prefix); mentioned {
 			cleanMsg = strings.TrimPrefix(msg, prefix)
 
@@ -82,6 +104,10 @@ func SlackPrefixMentionParser(name, id, msg string) (cleanMsg string, mentioned 
 	return
 }
 
+func (SlackPrefixMentionParser) FormatMention(userName, msg string) string {
+	return fmt.Sprintf("@%s %s", userName, msg)
+}
+
 type KeywordParser interface {
 	// If msg contains a keyword, returns the keyword and true, else empty and false.
 	ParseKeyword(msg string) (keyword string, matched bool)
@@ -92,9 +118,16 @@ type KeywordParser interface {
 
 type RegexpKeywordParser struct {
 	*regexp.Regexp
+	exampleGenerator regen.Generator
 }
 
-func NewRegexpKeywordParser(pattern string) (parser RegexpKeywordParser, err error) {
+/*
+NewRegexpKeywordParser creates a KeywordParser that parses keywords as the first capture group
+in pattern.
+
+keywords is used to generate sample phrases.
+*/
+func NewRegexpKeywordParser(pattern string, keywords []string) (parser RegexpKeywordParser, err error) {
 	// Make the regexp case-insensitive.
 	compiledPattern, err := regexp.Compile("(?i)" + pattern)
 	if err != nil {
@@ -106,7 +139,29 @@ func NewRegexpKeywordParser(pattern string) (parser RegexpKeywordParser, err err
 		return
 	}
 
-	parser = RegexpKeywordParser{compiledPattern}
+	// Setup the sample generator.
+	generator, err := regen.NewGenerator(pattern, &regen.GeneratorArgs{
+		Flags: syntax.Perl, // regexp.Compile uses this flag too.
+		MinUnboundedRepeatCount: 5,
+		MaxUnboundedRepeatCount: 5,
+		CaptureGroupHandler: func(index int, name string, group *syntax.Regexp, generator regen.Generator, args *regen.GeneratorArgs) string {
+			// Only use a keyword for the first capture group.
+			if index != 0 || len(keywords) == 0 {
+				return generator.Generate()
+			}
+
+			keywordIndex := args.Rng().Intn(len(keywords))
+			return keywords[keywordIndex]
+		}})
+	if err != nil {
+		err = errors.New("error creating sample phrase generator: " + err.Error())
+		return
+	}
+
+	parser = RegexpKeywordParser{
+		Regexp:           compiledPattern,
+		exampleGenerator: generator,
+	}
 	return
 }
 
@@ -130,6 +185,5 @@ func (p RegexpKeywordParser) ParseKeyword(msg string) (string, bool) {
 }
 
 func (p RegexpKeywordParser) GenerateSample() string {
-	// TODO Use goregen.
-	return "a string matching /" + p.Regexp.String() + "/"
+	return p.exampleGenerator.Generate()
 }
