@@ -166,7 +166,12 @@ func startBot(memepository Memepository) {
 		log.Fatal("Slack token not found. Set ", SlackTokenVar)
 	}
 
-	parser, err := NewRegexpKeywordParser(*KeywordPattern)
+	// Load the set of keywords for the sample generator.
+	memeIndex, err := memepository.Load()
+	if err != nil {
+		log.Fatalln("error loading keywords:", err)
+	}
+	parser, err := NewRegexpKeywordParser(*KeywordPattern, memeIndex.Keywords())
 	if err != nil {
 		log.Fatalf("error compiling keyword pattern '%s': %s", *KeywordPattern, err)
 	}

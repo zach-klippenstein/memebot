@@ -83,7 +83,7 @@ func TestMessageParser(t *testing.T) {
 			mentioned: true,
 		},
 	} {
-		kwParser, err := NewRegexpKeywordParser(test.pattern)
+		kwParser, err := NewRegexpKeywordParser(test.pattern, []string{})
 		require.NoError(t, err)
 		parser := MessageParser{KeywordParser: kwParser}
 
@@ -94,57 +94,59 @@ func TestMessageParser(t *testing.T) {
 	}
 }
 
+var testSlackPrefixMentionParser = SlackPrefixMentionParser{}
+
 func TestSlackPrefixMentionParser_Name(t *testing.T) {
-	clean, mentioned := SlackPrefixMentionParser("name", "id", "name baz")
+	clean, mentioned := testSlackPrefixMentionParser.ParseMention("name", "id", "name baz")
 	assert.True(t, mentioned)
 	assert.Equal(t, "baz", clean)
 
-	clean, mentioned = SlackPrefixMentionParser("name", "id", "name: baz")
+	clean, mentioned = testSlackPrefixMentionParser.ParseMention("name", "id", "name: baz")
 	assert.True(t, mentioned)
 	assert.Equal(t, "baz", clean)
 
-	clean, mentioned = SlackPrefixMentionParser("name", "id", "<@name>: baz")
+	clean, mentioned = testSlackPrefixMentionParser.ParseMention("name", "id", "<@name>: baz")
 	assert.False(t, mentioned)
 	assert.Equal(t, "<@name>: baz", clean)
 }
 
 func TestSlackPrefixMentionParser_MentionOnly(t *testing.T) {
-	clean, mentioned := SlackPrefixMentionParser("name", "", "name")
+	clean, mentioned := testSlackPrefixMentionParser.ParseMention("name", "", "name")
 	assert.True(t, mentioned)
 	assert.Equal(t, "", clean)
 
-	clean, mentioned = SlackPrefixMentionParser("name", "", "name: ")
+	clean, mentioned = testSlackPrefixMentionParser.ParseMention("name", "", "name: ")
 	assert.True(t, mentioned)
 	assert.Equal(t, "", clean)
 }
 
 func TestSlackPrefixMention_ParserId(t *testing.T) {
-	clean, mentioned := SlackPrefixMentionParser("name", "id", "<@id>: baz")
+	clean, mentioned := testSlackPrefixMentionParser.ParseMention("name", "id", "<@id>: baz")
 	assert.True(t, mentioned)
 	assert.Equal(t, "baz", clean)
 
-	clean, mentioned = SlackPrefixMentionParser("name", "id", "id baz")
+	clean, mentioned = testSlackPrefixMentionParser.ParseMention("name", "id", "id baz")
 	assert.False(t, mentioned)
 	assert.Equal(t, "id baz", clean)
 }
 
 func TestNewRegexpKeywordParser(t *testing.T) {
-	parser, err := NewRegexpKeywordParser(`(hello) world`)
+	parser, err := NewRegexpKeywordParser(`(hello) world`, []string{})
 	assert.NoError(t, err)
 	assert.NotNil(t, parser.Regexp)
 
-	parser, err = NewRegexpKeywordParser(`(hello) (world)`)
+	parser, err = NewRegexpKeywordParser(`(hello) (world)`, []string{})
 	assert.NoError(t, err)
 	assert.NotNil(t, parser.Regexp)
 }
 
 func TestNewRegexpKeywordParser_RequiresCaptureGroup(t *testing.T) {
-	_, err := NewRegexpKeywordParser(`hello world`)
+	_, err := NewRegexpKeywordParser(`hello world`, []string{})
 	assert.EqualError(t, err, "keyword pattern must have at least 1 capturing group: /hello world/")
 }
 
 func TestRegexpKeywordParser(t *testing.T) {
-	parser, _ := NewRegexpKeywordParser(`a (\w+) (b)`)
+	parser, _ := NewRegexpKeywordParser(`a (\w+) (b)`, []string{})
 
 	// Happy cases.
 	for _, msg := range []string{
@@ -165,4 +167,9 @@ func TestRegexpKeywordParser(t *testing.T) {
 		_, match := parser.ParseKeyword(msg)
 		assert.False(t, match)
 	}
+}
+
+func TestGenerateSample(t *testing.T) {
+	parser, _ := NewRegexpKeywordParser(`foo (\w+) bar`, []string{"baz"})
+	assert.Equal(t, "foo baz bar", parser.GenerateSample())
 }

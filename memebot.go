@@ -36,7 +36,7 @@ func (h DefaultErrorHandler) OnPhraseNotUnderstood(phrase, sample string) string
 }
 
 func (DefaultErrorHandler) OnHelp(sample string) string {
-	return fmt.Sprint("Try ", sample)
+	return fmt.Sprintf("Try something like “%s”", sample)
 }
 
 type MemeBotConfig struct {
@@ -77,6 +77,13 @@ func (c *MemeBotConfig) Validate() error {
 	}
 
 	return nil
+}
+
+func (c *MemeBotConfig) GenerateSample(userName string) string {
+	if c.ParseAllMessages {
+		return c.Parser.GenerateSample("")
+	}
+	return c.Parser.GenerateSample(userName)
 }
 
 type MemeBot struct {
@@ -210,19 +217,19 @@ func (b *MemeBot) handleMessage(ctx context.Context, m *slack.Message) {
 
 func handleMessage(self *slack.UserDetails, config MemeBotConfig, m *slack.Message) string {
 	keyword, mentioned, help := config.Parser.ParseMessage(self.Name, self.ID, m.Text)
-	sample := config.Parser.KeywordParser.GenerateSample
 
 	if !mentioned && !config.ParseAllMessages {
 		return ""
 	}
 
 	if help {
-		return config.ErrorHandler.OnHelp(sample())
+		return config.ErrorHandler.OnHelp(config.GenerateSample(self.Name))
 	}
 
 	if keyword == "" {
 		if mentioned {
-			return config.ErrorHandler.OnPhraseNotUnderstood(m.Text, sample())
+			return config.ErrorHandler.OnPhraseNotUnderstood(m.Text,
+				config.GenerateSample(self.Name))
 		}
 		return ""
 	}
